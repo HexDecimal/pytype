@@ -19,10 +19,14 @@ namespace typegraph = devtools_python_typegraph;
                                 const_cast<char**>(kwlist), ##__VA_ARGS__)
 
 // forward declarations of singletons
-extern PyTypeObject PyProgram;
-extern PyTypeObject PyCFGNode;
-extern PyTypeObject PyVariable;
-extern PyTypeObject PyBinding;
+static PyObject* PyProgram;
+static PyTypeObject* PyProgramType;
+static PyObject* PyCFGNode;
+static PyTypeObject* PyCFGNodeType;
+static PyObject* PyVariable;
+static PyTypeObject* PyVariableType;
+static PyObject* PyBinding;
+static PyTypeObject* PyBindingType;
 
 // String constants for tp_getattro. Initialized on module init.
 static PyObject* k_entrypoint;
@@ -149,7 +153,7 @@ static PyObject* WrapCFGNode(PyProgramObj* program,
   PyObject* cached = FindInCache(program, cfg_node);
   if (cached)
     return cached;
-  PyObject* obj = NewCachedPyObject(&PyCFGNode, program, cfg_node);
+  PyObject* obj = NewCachedPyObject(PyCFGNodeType, program, cfg_node);
   PyCFGNodeObj* py_cfg_node = reinterpret_cast<PyCFGNodeObj*>(obj);
   py_cfg_node->cfg_node = cfg_node;
   return obj;
@@ -159,7 +163,7 @@ static PyObject* WrapBinding(PyProgramObj* program, typegraph::Binding* attr) {
   PyObject* cached = FindInCache(program, attr);
   if (cached)
     return cached;
-  PyObject* obj = NewCachedPyObject(&PyBinding, program, attr);
+  PyObject* obj = NewCachedPyObject(PyBindingType, program, attr);
   PyBindingObj* py_binding = reinterpret_cast<PyBindingObj*>(obj);
   py_binding->attr = attr;
   return obj;
@@ -169,7 +173,7 @@ static PyObject* WrapVariable(PyProgramObj* program, typegraph::Variable* u) {
   PyObject* cached = FindInCache(program, u);
   if (cached)
     return cached;
-  PyObject* obj = NewCachedPyObject(&PyVariable, program, u);
+  PyObject* obj = NewCachedPyObject(PyVariableType, program, u);
   PyVariableObj* py_variable = reinterpret_cast<PyVariableObj*>(obj);
   py_variable->u = u;
   return obj;
@@ -184,7 +188,7 @@ static bool VerifyListOfBindings(PyObject* list, PyProgramObj* program) {
   int length = PyList_Size(list);
   for (int i = 0; i < length; i++) {
     PyObject* item = PyList_GET_ITEM(list, i);
-    if (Py_TYPE(item) != &PyBinding) {
+    if (Py_TYPE(item) != PyBindingType) {
       PyErr_SetString(PyExc_AttributeError,
                       "expected a list of Binding instances");
       return false;
@@ -219,7 +223,7 @@ static bool IsTypeOrNone(PyObject* obj, PyTypeObject* type, T** ret) {
 static bool IsCFGNodeOrNone(PyObject* obj, typegraph::CFGNode** ret) {
   PyCFGNodeObj* temp = nullptr;
   *ret = nullptr;
-  if (IsTypeOrNone<PyCFGNodeObj>(obj, &PyCFGNode, &temp)) {
+  if (IsTypeOrNone<PyCFGNodeObj>(obj, PyCFGNodeType, &temp)) {
     if (temp)
       *ret = temp->cfg_node;
     return true;
@@ -234,7 +238,7 @@ static bool IsTruthy(PyObject* obj, bool default_bool = true) {
 // --- Program -----------------------------------------------------------------
 
 static void ProgramDealloc(PyObject* self) {
-  CHECK(self && Py_TYPE(self) == &PyProgram);
+  CHECK(self && Py_TYPE(self) == PyProgramType);
   PyProgramObj* program = reinterpret_cast<PyProgramObj*>(self);
   auto start = program->cache->begin();
   auto end = program->cache->end();
@@ -252,7 +256,7 @@ static void ProgramDealloc(PyObject* self) {
 }
 
 static PyObject* ProgramGetAttro(PyObject* self, PyObject* attr) {
-  CHECK(self && Py_TYPE(self) == &PyProgram);
+  CHECK(self && Py_TYPE(self) == PyProgramType);
   PyProgramObj* program = reinterpret_cast<PyProgramObj*>(self);
   if (PyObject_RichCompareBool(attr, k_cfg_nodes, Py_EQ) > 0) {
     PyObject* list = PyList_New(0);
@@ -294,12 +298,11 @@ static PyObject* ProgramGetAttro(PyObject* self, PyObject* attr) {
 }
 
 static int ProgramSetAttro(PyObject* self, PyObject* attr, PyObject* val) {
-  CHECK(self != nullptr);
-  CHECK(Py_TYPE(self) == &PyProgram);
+  CHECK(self && Py_TYPE(self) == PyProgramType);
   PyProgramObj* program = reinterpret_cast<PyProgramObj*>(self);
 
   if (PyObject_RichCompareBool(attr, k_entrypoint, Py_EQ) > 0) {
-    if (Py_TYPE(val) == &PyCFGNode) {
+    if (Py_TYPE(val) == PyCFGNodeType) {
       PyCFGNodeObj* cfg_node = reinterpret_cast<PyCFGNodeObj*>(val);
       program->program->set_entrypoint(cfg_node->cfg_node);
     } else if (val == Py_None) {
@@ -321,7 +324,7 @@ static PyObject* ProgramNew(PyTypeObject* type,
                             PyObject* args, PyObject* kwargs) {
   if (!PyArg_ParseTuple(args, ""))
     return nullptr;
-  PyProgramObj* program = PyObject_New(PyProgramObj, &PyProgram);
+  PyProgramObj* program = PyObject_New(PyProgramObj, PyProgramType);
   program->cache = new std::unordered_map<const void*, PyObject*>;
   program->program = new typegraph::Program;
   return reinterpret_cast<PyObject*>(program);
@@ -337,7 +340,7 @@ static PyObject* NewCFGNode(PyProgramObj* self,
   std::string name;
   PyObject* condition_obj = nullptr;
   if (!SafeParseTupleAndKeywords(args, kwargs, "|OO!", kwlist, &name_obj,
-                                 &PyBinding, &condition_obj))
+                                 PyBinding, &condition_obj))
     return nullptr;
   if (name_obj) {
     name_obj = PyObject_Str(name_obj);
@@ -458,8 +461,8 @@ static PyObject* is_reachable(PyProgramObj* self,
   static const char* kwlist[] = {"src", "dst", nullptr};
   PyCFGNodeObj* src;
   PyCFGNodeObj* dst;
-  if (!SafeParseTupleAndKeywords(args, kwargs, "O!O!", kwlist, &PyCFGNode,
-                                 &src, &PyCFGNode, &dst))
+  if (!SafeParseTupleAndKeywords(args, kwargs, "O!O!", kwlist, PyCFGNode,
+                                 &src, PyCFGNode, &dst))
     return nullptr;
   if (self->program->is_reachable(src->cfg_node, dst->cfg_node)) {
     Py_RETURN_TRUE;
@@ -498,58 +501,28 @@ PyDoc_STRVAR(
     "you hold a reference of a program or any (!) of its structures, it will "
     "stay in memory.");
 
-PyTypeObject PyProgram = {
-  PyVarObject_HEAD_INIT(&PyType_Type, 0) tp_name : "Program",
-  tp_basicsize : sizeof(PyProgramObj),
-  tp_itemsize : 0,
-  tp_dealloc : ProgramDealloc,
-#if PY_VERSION_HEX >= 0x03080000  // 3.8
-  tp_vectorcall_offset: -1,
-# else
-  tp_print : nullptr,
-# endif
-  tp_getattr : nullptr,
-  tp_setattr : nullptr,
-#if PY_VERSION_HEX >= 0x03050000  // 3.5
-  tp_as_async : nullptr,
-#else
-  tp_compare : nullptr,
-#endif
-  tp_repr : nullptr,
-  tp_as_number : nullptr,
-  tp_as_sequence : nullptr,
-  tp_as_mapping : nullptr,
-  tp_hash : nullptr,
-  tp_call : nullptr,
-  tp_str : nullptr,
-  tp_getattro : ProgramGetAttro,
-  tp_setattro : ProgramSetAttro,
-  tp_as_buffer : nullptr,
-  tp_flags : 0,
-  tp_doc : program_doc,
-  tp_traverse : nullptr,
-  tp_clear : nullptr,
-  tp_richcompare : nullptr,
-  tp_weaklistoffset : 0,
-  tp_iter : nullptr,
-  tp_iternext : nullptr,
-  tp_methods : program_methods,
-  tp_members : nullptr,
-  tp_getset : nullptr,
-  tp_base : nullptr,
-  tp_dict : nullptr,
-  tp_descr_get : nullptr,
-  tp_descr_set : nullptr,
-  tp_dictoffset : 0,
-  tp_init : nullptr,
-  tp_alloc : nullptr,
-  tp_new : ProgramNew,
+PyType_Slot PyProgramSlots[] = {
+  {Py_tp_dealloc, reinterpret_cast<void*>(ProgramDealloc)},
+  {Py_tp_getattro, reinterpret_cast<void*>(ProgramGetAttro)},
+  {Py_tp_setattro, reinterpret_cast<void*>(ProgramSetAttro)},
+  {Py_tp_doc, const_cast<char*>(program_doc)},
+  {Py_tp_methods, program_methods},
+  {Py_tp_new, reinterpret_cast<void*>(ProgramNew)},
+  {0, nullptr},
+};
+
+PyType_Spec PyProgramSpec = {
+  "Program",  // name
+  sizeof(PyProgramObj),  // basicsize
+  0,  // itemsize
+  0,  // flags
+  PyProgramSlots,
 };
 
 // --- CFGNode -----------------------------------------------------------------
 
 static PyObject* CFGNodeGetAttro(PyObject* self, PyObject* attr) {
-  CHECK(self && Py_TYPE(self) == &PyCFGNode);
+  CHECK(self && Py_TYPE(self) == PyCFGNodeType);
   PyCFGNodeObj* cfg_node = reinterpret_cast<PyCFGNodeObj*>(self);
   PyProgramObj* program = get_program(self);
 
@@ -596,11 +569,11 @@ static PyObject* CFGNodeGetAttro(PyObject* self, PyObject* attr) {
 
 static int CFGNodeSetAttro(PyObject* self, PyObject* attr, PyObject* val) {
   CHECK(self != nullptr);
-  CHECK(Py_TYPE(self) == &PyCFGNode);
+  CHECK(Py_TYPE(self) == PyCFGNodeType);
   PyCFGNodeObj* cfg_node = reinterpret_cast<PyCFGNodeObj*>(self);
 
   if (PyObject_RichCompareBool(attr, k_condition, Py_EQ) > 0) {
-    if (Py_TYPE(val) == &PyBinding) {
+    if (Py_TYPE(val) == PyBindingType) {
       PyBindingObj* condition = reinterpret_cast<PyBindingObj*>(val);
       cfg_node->cfg_node->set_condition(condition->attr);
     } else if (val == Py_None) {
@@ -615,7 +588,7 @@ static int CFGNodeSetAttro(PyObject* self, PyObject* attr, PyObject* val) {
 }
 
 static void CFGNodeDealloc(PyObject* self) {
-  CHECK(self && Py_TYPE(self) == &PyCFGNode);
+  CHECK(self && Py_TYPE(self) == PyCFGNodeType);
   PyCFGNodeObj* cfg_node = reinterpret_cast<PyCFGNodeObj*>(self);
   RemoveFromCache(self, cfg_node->cfg_node);
   PyObject_Del(self);
@@ -667,7 +640,7 @@ static PyObject* ConnectNew(PyCFGNodeObj* self,
 
   if (!condition_obj || condition_obj == Py_None) {
     return WrapCFGNode(program, self->cfg_node->ConnectNew(name, nullptr));
-  } else if (PyObject_TypeCheck(condition_obj, &PyBinding)) {
+  } else if (PyObject_TypeCheck(condition_obj, PyBindingType)) {
     auto cond = reinterpret_cast<PyBindingObj*>(condition_obj);
     return WrapCFGNode(program, self->cfg_node->ConnectNew(name, cond->attr));
   } else {
@@ -682,7 +655,7 @@ PyDoc_STRVAR(connect_to_doc,
 static PyObject* ConnectTo(PyCFGNodeObj* self,
                            PyObject* args, PyObject* kwargs) {
   PyCFGNodeObj* node;
-  if (!PyArg_ParseTuple(args, "O!", &PyCFGNode, &node))
+  if (!PyArg_ParseTuple(args, "O!", PyCFGNode, &node))
     return nullptr;
   self->cfg_node->ConnectTo(node->cfg_node);
   Py_RETURN_NONE;
@@ -763,42 +736,23 @@ PyDoc_STRVAR(cfg_node_doc,
     "\"x = x + 1\" is in a single CFGNode, both bindings for x will be visible "
     "inside that node.");
 
-PyTypeObject PyCFGNode = {
-  PyVarObject_HEAD_INIT(&PyType_Type, 0) tp_name : "CFGNode",
-  tp_basicsize : sizeof(PyCFGNodeObj),
-  tp_itemsize : 0,
-  tp_dealloc : CFGNodeDealloc,
-#if PY_VERSION_HEX >= 0x03080000  // 3.8
-  tp_vectorcall_offset: -1,
-# else
-  tp_print : nullptr,
-# endif
-  tp_getattr : nullptr,
-  tp_setattr : nullptr,
-#if PY_VERSION_HEX >= 0x03050000  // 3.5
-  tp_as_async : nullptr,
-#else
-  tp_compare : nullptr,
-#endif
-  tp_repr : CFGNodeRepr,
-  tp_as_number : nullptr,
-  tp_as_sequence : nullptr,
-  tp_as_mapping : nullptr,
-  tp_hash : nullptr,
-  tp_call : nullptr,
-  tp_str : CFGNodeRepr,
-  tp_getattro : CFGNodeGetAttro,
-  tp_setattro : CFGNodeSetAttro,
-  tp_as_buffer : nullptr,
-  tp_flags : 0,
-  tp_doc : cfg_node_doc,
-  tp_traverse : nullptr,
-  tp_clear : nullptr,
-  tp_richcompare : nullptr,
-  tp_weaklistoffset : 0,
-  tp_iter : nullptr,
-  tp_iternext : nullptr,
-  tp_methods : cfg_node_methods,
+PyType_Slot PyCFGNodeSlots[] = {
+  {Py_tp_dealloc, reinterpret_cast<void*>(CFGNodeDealloc)},
+  {Py_tp_repr, reinterpret_cast<void*>(CFGNodeRepr)},
+  {Py_tp_str, reinterpret_cast<void*>(CFGNodeRepr)},
+  {Py_tp_getattro, reinterpret_cast<void*>(CFGNodeGetAttro)},
+  {Py_tp_setattro, reinterpret_cast<void*>(CFGNodeSetAttro)},
+  {Py_tp_doc, const_cast<char*>(cfg_node_doc)},
+  {Py_tp_methods, cfg_node_methods},
+  {0, nullptr},
+};
+
+PyType_Spec PyCFGNodeSpec = {
+  "CFGNode",  // name
+  sizeof(PyCFGNodeObj),  // basicsize
+  0,  // itemsize
+  0,  // flags
+  PyCFGNodeSlots,
 };
 
 // --- Origin --------------------------------------------------------------
@@ -819,16 +773,16 @@ static PyStructSequence_Field origin_fields[] = {
     {nullptr}};
 
 static PyStructSequence_Desc origin_desc = {
-  name: const_cast<char*>("Origin"),
-  doc: origin_doc,
-  fields: origin_fields,
-  n_in_sequence: 2,
+  const_cast<char*>("Origin"),  // name
+  origin_doc,  // doc
+  origin_fields,  // fields
+  2,  // n_in_sequence
 };
 
 // --- Binding ---------------------------------------------------------------
 
 static void BindingDealloc(PyObject* self) {
-  CHECK(self && Py_TYPE(self) == &PyBinding);
+  CHECK(self && Py_TYPE(self) == PyBindingType);
   PyBindingObj* attr = reinterpret_cast<PyBindingObj*>(self);
   RemoveFromCache(self, attr->attr);
   PyObject_Del(self);
@@ -852,7 +806,7 @@ static PyObject* BindingRepr(PyObject* self) {
 }
 
 static PyObject* BindingGetAttro(PyObject* self, PyObject* attr) {
-  CHECK(self && Py_TYPE(self) == &PyBinding);
+  CHECK(self && Py_TYPE(self) == PyBindingType);
   PyBindingObj* a = reinterpret_cast<PyBindingObj*>(self);
   PyProgramObj* program = get_program(self);
 
@@ -900,7 +854,7 @@ static PyObject* IsVisible(PyBindingObj* self, PyObject* args,
                            PyObject* kwargs) {
   static const char *kwlist[] = {"where", nullptr};
   PyCFGNodeObj* node;
-  if (!SafeParseTupleAndKeywords(args, kwargs, "O!", kwlist, &PyCFGNode, &node))
+  if (!SafeParseTupleAndKeywords(args, kwargs, "O!", kwlist, PyCFGNode, &node))
     return nullptr;
   if (self->attr->IsVisible(node->cfg_node)) {
     Py_RETURN_TRUE;
@@ -916,7 +870,7 @@ static PyObject* AddOrigin(PyBindingObj* self, PyObject* args,
   static const char *kwlist[] = {"where", "source_set", nullptr};
   PyCFGNodeObj* where;
   PyObject* source_set;
-  if (!SafeParseTupleAndKeywords(args, kwargs, "O!O", kwlist, &PyCFGNode,
+  if (!SafeParseTupleAndKeywords(args, kwargs, "O!O", kwlist, PyCFGNode,
                                  &where, &source_set))
     return nullptr;
   if (!ContainerToSourceSet(&source_set, get_program(self))) {
@@ -958,7 +912,7 @@ static PyObject* HasSource(PyBindingObj* self, PyObject* args,
                            PyObject* kwargs) {
   static const char* kwlist[] = {"binding", nullptr};
   PyBindingObj* binding;
-  if (!SafeParseTupleAndKeywords(args, kwargs, "O!", kwlist, &PyBinding,
+  if (!SafeParseTupleAndKeywords(args, kwargs, "O!", kwlist, PyBinding,
                                  &binding))
     return nullptr;
   if (self->attr->HasSource(binding->attr)) {
@@ -993,48 +947,28 @@ PyDoc_STRVAR(
     "Origins contain, through source sets, \"sources\", which are other "
     "Bindings.");
 
-PyTypeObject PyBinding = {
-  PyVarObject_HEAD_INIT(&PyType_Type, 0) tp_name : "Binding",
-  tp_basicsize : sizeof(PyBindingObj),
-  tp_itemsize : 0,
-  tp_dealloc : BindingDealloc,
-#if PY_VERSION_HEX >= 0x03080000  // 3.8
-  tp_vectorcall_offset: -1,
-# else
-  tp_print : nullptr,
-# endif
-  tp_getattr : nullptr,
-  tp_setattr : nullptr,
-#if PY_VERSION_HEX >= 0x03050000  // 3.5
-  tp_as_async : nullptr,
-#else
-  tp_compare : nullptr,
-#endif
-  tp_repr : BindingRepr,
-  tp_as_number : nullptr,
-  tp_as_sequence : nullptr,
-  tp_as_mapping : nullptr,
-  tp_hash : nullptr,
-  tp_call : nullptr,
-  tp_str : BindingRepr,
-  tp_getattro : BindingGetAttro,
-  tp_setattro : nullptr,
-  tp_as_buffer : nullptr,
-  tp_flags : 0,
-  tp_doc : binding_doc,
-  tp_traverse : nullptr,
-  tp_clear : nullptr,
-  tp_richcompare : nullptr,
-  tp_weaklistoffset : 0,
-  tp_iter : nullptr,
-  tp_iternext : nullptr,
-  tp_methods : binding_methods,
+PyType_Slot PyBindingSlots[] = {
+  {Py_tp_dealloc, reinterpret_cast<void*>(BindingDealloc)},
+  {Py_tp_repr, reinterpret_cast<void*>(BindingRepr)},
+  {Py_tp_str, reinterpret_cast<void*>(BindingRepr)},
+  {Py_tp_getattro, reinterpret_cast<void*>(BindingGetAttro)},
+  {Py_tp_doc, const_cast<char*>(binding_doc)},
+  {Py_tp_methods, binding_methods},
+  {0, nullptr},
+};
+
+PyType_Spec PyBindingSpec = {
+  "Binding",  // name
+  sizeof(PyBindingObj),  // basicsize
+  0,  // itemsize
+  0,  // flags
+  PyBindingSlots,
 };
 
 // --- Variable ----------------------------------------------------------------
 
 static void VariableDealloc(PyObject* self) {
-  CHECK(self && Py_TYPE(self) == &PyVariable);
+  CHECK(self && Py_TYPE(self) == PyVariableType);
   PyVariableObj* u = reinterpret_cast<PyVariableObj*>(self);
   RemoveFromCache(self, u->u);
   PyObject_Del(self);
@@ -1047,7 +981,7 @@ static PyObject* VariableRepr(PyObject* self) {
 }
 
 static PyObject* VariableGetAttro(PyObject* self, PyObject* attr) {
-  CHECK(self && Py_TYPE(self) == &PyVariable);
+  CHECK(self && Py_TYPE(self) == PyVariableType);
   PyVariableObj* u = reinterpret_cast<PyVariableObj*>(self);
   PyProgramObj* program = get_program(self);
 
@@ -1078,7 +1012,7 @@ static PyObject* VariableGetAttro(PyObject* self, PyObject* attr) {
 
 static int VariableSetAttro(PyObject* self, PyObject* attr, PyObject* val) {
   CHECK(self != nullptr);
-  CHECK(Py_TYPE(self) == &PyVariable);
+  CHECK(Py_TYPE(self) == PyVariableType);
   return PyObject_GenericSetAttr(self, attr, val);
 }
 
@@ -1180,7 +1114,7 @@ static PyObject* VariableFilteredData(PyVariableObj* self,
   static const char *kwlist[] = {"cfg_node", "strict", nullptr};
   PyCFGNodeObj* cfg_node;
   PyObject* strict_obj = nullptr;
-  if (!SafeParseTupleAndKeywords(args, kwargs, "O!|O", kwlist, &PyCFGNode,
+  if (!SafeParseTupleAndKeywords(args, kwargs, "O!|O", kwlist, PyCFGNode,
                                  &cfg_node, &strict_obj))
     return nullptr;
   const auto strict = IsTruthy(strict_obj);
@@ -1250,8 +1184,8 @@ static PyObject* VariableAddBindings(PyVariableObj* self, PyObject* args,
   static const char *kwlist[] = {"variable", "where", nullptr};
   PyVariableObj* variable = nullptr;
   PyCFGNodeObj* where = nullptr;
-  if (!SafeParseTupleAndKeywords(args, kwargs, "O!O!", kwlist, &PyVariable,
-                                 &variable, &PyCFGNode, &where)) {
+  if (!SafeParseTupleAndKeywords(args, kwargs, "O!O!", kwlist, PyVariable,
+                                 &variable, PyCFGNode, &where)) {
     return nullptr;
   }
   for (const auto& binding : variable->u->bindings()) {
@@ -1299,7 +1233,7 @@ static PyObject* VariablePasteVariable(PyVariableObj* self, PyObject* args,
   PyVariableObj* variable;
   PyObject* where_obj = nullptr;
   PyObject* additional = nullptr;
-  if (!SafeParseTupleAndKeywords(args, kwargs, "O!|OO", kwlist, &PyVariable,
+  if (!SafeParseTupleAndKeywords(args, kwargs, "O!|OO", kwlist, PyVariable,
                                  &variable, &where_obj, &additional)) {
     return nullptr;
   }
@@ -1336,7 +1270,7 @@ static PyObject* VariablePasteBinding(PyVariableObj* self, PyObject* args,
   PyBindingObj* binding;
   PyObject* where_obj = nullptr;
   PyObject* additional = nullptr;
-  if (!SafeParseTupleAndKeywords(args, kwargs, "O!|OO", kwlist, &PyBinding,
+  if (!SafeParseTupleAndKeywords(args, kwargs, "O!|OO", kwlist, PyBinding,
                                  &binding, &where_obj, &additional)) {
     return nullptr;
   }
@@ -1392,42 +1326,23 @@ PyDoc_STRVAR(
     "which the bindings occur. New bindings are added via AddBinding or "
     "PasteVariable.");
 
-PyTypeObject PyVariable = {
-  PyVarObject_HEAD_INIT(&PyType_Type, 0) tp_name : "Variable",
-  tp_basicsize : sizeof(PyVariableObj),
-  tp_itemsize : 0,
-  tp_dealloc : VariableDealloc,
-#if PY_VERSION_HEX >= 0x03080000  // 3.8
-  tp_vectorcall_offset: -1,
-# else
-  tp_print : nullptr,
-# endif
-  tp_getattr : nullptr,
-  tp_setattr : nullptr,
-#if PY_VERSION_HEX >= 0x03050000  // 3.5
-  tp_as_async : nullptr,
-#else
-  tp_compare : nullptr,
-#endif
-  tp_repr : VariableRepr,
-  tp_as_number : nullptr,
-  tp_as_sequence : nullptr,
-  tp_as_mapping : nullptr,
-  tp_hash : nullptr,
-  tp_call : nullptr,
-  tp_str : VariableRepr,
-  tp_getattro : VariableGetAttro,
-  tp_setattro : VariableSetAttro,
-  tp_as_buffer : nullptr,
-  tp_flags : 0,
-  tp_doc : variable_doc,
-  tp_traverse : nullptr,
-  tp_clear : nullptr,
-  tp_richcompare : nullptr,
-  tp_weaklistoffset : 0,
-  tp_iter : nullptr,
-  tp_iternext : nullptr,
-  tp_methods : variable_methods,
+PyType_Slot PyVariableSlots[] = {
+  {Py_tp_dealloc, reinterpret_cast<void*>(VariableDealloc)},
+  {Py_tp_repr, reinterpret_cast<void*>(VariableRepr)},
+  {Py_tp_str, reinterpret_cast<void*>(VariableRepr)},
+  {Py_tp_getattro, reinterpret_cast<void*>(VariableGetAttro)},
+  {Py_tp_setattro, reinterpret_cast<void*>(VariableSetAttro)},
+  {Py_tp_doc, const_cast<char*>(variable_doc)},
+  {Py_tp_methods, variable_methods},
+  {0, nullptr},
+};
+
+PyType_Spec PyVariableSpec = {
+  "Variable",  // name
+  sizeof(PyVariableObj),  // basicsize
+  0,  // itemsize
+  0,  // flags
+  PyVariableSlots,
 };
 
 // --- cfg module and metrics --------------------------------------------------
@@ -1438,16 +1353,12 @@ static PyObject* InitModule(PyObject* module) {
     if (PyStructSequence_InitType2(&PyOrigin, &origin_desc) == -1)
       return NULL;
   }
-  PyDict_SetItemString(module_dict, "Program",
-                       reinterpret_cast<PyObject*>(&PyProgram));
-  PyDict_SetItemString(module_dict, "CFGNode",
-                       reinterpret_cast<PyObject*>(&PyCFGNode));
+  PyDict_SetItemString(module_dict, "Program", PyProgram);
+  PyDict_SetItemString(module_dict, "CFGNode", PyCFGNode);
   PyDict_SetItemString(module_dict, "Origin",
                        reinterpret_cast<PyObject*>(&PyOrigin));
-  PyDict_SetItemString(module_dict, "Binding",
-                       reinterpret_cast<PyObject*>(&PyBinding));
-  PyDict_SetItemString(module_dict, "Variable",
-                       reinterpret_cast<PyObject*>(&PyVariable));
+  PyDict_SetItemString(module_dict, "Binding", PyBinding);
+  PyDict_SetItemString(module_dict, "Variable", PyVariable);
 
   Py_XDECREF(k_entrypoint);
   k_entrypoint = PyUnicode_FromString("entrypoint");
@@ -1545,10 +1456,14 @@ PYBIND11_MODULE(cfg, m) {
       .def_property_readonly("solver_metrics",
                              &typegraph::Metrics::solver_metrics);
 
-  PyType_Ready(&PyProgram);
-  PyType_Ready(&PyCFGNode);
-  PyType_Ready(&PyVariable);
-  PyType_Ready(&PyBinding);
+  PyProgram = PyType_FromSpec(&PyProgramSpec);
+  PyProgramType = reinterpret_cast<PyTypeObject*>(PyProgram);
+  PyCFGNode = PyType_FromSpec(&PyCFGNodeSpec);
+  PyCFGNodeType = reinterpret_cast<PyTypeObject*>(PyCFGNode);
+  PyVariable = PyType_FromSpec(&PyVariableSpec);
+  PyVariableType = reinterpret_cast<PyTypeObject*>(PyVariable);
+  PyBinding = PyType_FromSpec(&PyBindingSpec);
+  PyBindingType = reinterpret_cast<PyTypeObject*>(PyBinding);
   InitModule(m.ptr());
   pytype::typegraph::internal::CFGLogger::Init();
 }
