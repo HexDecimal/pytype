@@ -260,5 +260,7 @@ def run_ninja(targets, fail_collector=None, fail_fast=False, verbose=False):
       print(">>> FAILED: Ninja command '%s'." % " ".join(cmd))
       print(">>>         Run it in the 'out' directory to reproduce.")
       print(">>>         Full Ninja output is available in '%s'." % NINJA_LOG)
+      with open(NINJA_LOG, "r") as ninja_log:
+        print(ninja_log.read())
       print(">>>         Failing test modules (if any) will be reported below.")
       return False
